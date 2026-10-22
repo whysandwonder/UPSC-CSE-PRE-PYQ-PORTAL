@@ -138,7 +138,7 @@
     var done = t.correct + t.wrong + t.dropped;
     var acc = done ? Math.round((t.correct / done) * 100) + "%" : "–";
     var last = load(LAST_KEY, null);
-    var cont = last && typeof last.hash === "string" && /^#\/(subject|paper)\/[\w-]+\/\d+$/.test(last.hash) ?
+    var cont = last && typeof last.hash === "string" && /^#\/(subject|paper|unit)\/[\w@-]+\/\d+$/.test(last.hash) ?
       '<a class="continue" href="' + esc(last.hash) + '" id="continue">' + icon("play") +
       '<span><small>Continue where you left off</small><b>' + esc(last.label || "Last question") + '</b></span><span class="arrow">→</span></a>' : "";
     var lastBackup = load(BACKUP_KEY, 0);
@@ -241,6 +241,12 @@
       list = QUESTIONS.filter(function (q) { return q.subject === key; });
       title = subjectName(key);
       backHref = "#/subjects";
+    } else if (kind === "unit") {
+      // key is a unit id, or "unitId@year" for questions from that year on (recent-trends table)
+      var uid = key.split("@")[0], from = Number(key.split("@")[1]) || 0, u = UNITS[uid];
+      list = u ? QUESTIONS.filter(function (q) { return UNIT_OF[q.id] === uid && q.year >= from; }) : [];
+      title = u ? subjectName(u.subject) + " · " + u.title + (from ? " (" + from + "–" + MAX_YEAR + ")" : "") : "Subtopic";
+      backHref = "#/analysis/" + (from ? "recent" : "all");
     } else {
       list = QUESTIONS.filter(function (q) { return q.year === Number(key); });
       title = key + " · GS Paper I";
@@ -672,6 +678,136 @@
     bindMarks();
   }
 
+  // ---------- PYQ analysis: broad subtopics (book units) ranked by how often UPSC asks them ----------
+  var UNIT_OF = window.PYQ_UNIT_OF || {};
+  var UNITS = {};            // unit id -> { subject, title, topics: [titles], firstTopic }
+  SUBJECTS.forEach(function (s) {
+    if (!BOOKS[s.id]) return;
+    BOOKS[s.id].units.forEach(function (u) {
+      UNITS[u.id] = { id: u.id, subject: s.id, title: u.title, topics: u.topics.map(function (t) { return t.title; }), firstTopic: u.topics[0] && u.topics[0].id };
+    });
+  });
+  var MIN_YEAR = 2000, MAX_YEAR = 2026, RECENT_FROM = 2018, SPLIT_YEAR = 2013;
+  var anFilter = { subject: "", query: "" };
+  var anCache = null;
+  // Per unit: questions per year; per year: questions in that paper (all subjects)
+  function analysisData() {
+    if (anCache) return anCache;
+    var perYear = {}, perUnit = {};
+    QUESTIONS.forEach(function (q) {
+      perYear[q.year] = (perYear[q.year] || 0) + 1;
+      var u = UNIT_OF[q.id];
+      if (!u || !UNITS[u]) return;
+      var x = perUnit[u] || (perUnit[u] = { total: 0, byYear: {} });
+      x.total++;
+      x.byYear[q.year] = (x.byYear[q.year] || 0) + 1;
+    });
+    var years = Object.keys(perYear).map(Number).sort();
+    // average share of a paper over a span of years: fair across 150-question (2000–2010) and 100-question papers
+    function share(byYear, a, b) {
+      var sum = 0, n = 0;
+      years.forEach(function (y) { if (y >= a && y <= b) { sum += (byYear[y] || 0) / perYear[y]; n++; } });
+      return n ? sum / n * 100 : 0;
+    }
+    var rows = Object.keys(UNITS).map(function (id) {
+      var x = perUnit[id] || { total: 0, byYear: {} };
+      var early = share(x.byYear, MIN_YEAR, SPLIT_YEAR - 1), late = share(x.byYear, SPLIT_YEAR, MAX_YEAR);
+      var trend = late >= early ? "up" : "down";
+      var recentYears = years.filter(function (y) { return y >= RECENT_FROM && x.byYear[y]; });
+      return {
+        unit: UNITS[id], total: x.total, byYear: x.byYear, trend: trend,
+        recent: recentYears.reduce(function (n, y) { return n + x.byYear[y]; }, 0), recentYears: recentYears
+      };
+    });
+    anCache = { rows: rows, perYear: perYear, years: years };
+    return anCache;
+  }
+  function hl(text, q) {
+    var t = esc(text);
+    if (!q) return t;
+    var i = text.toLowerCase().indexOf(q);
+    if (i < 0) return t;
+    return esc(text.slice(0, i)) + "<mark>" + esc(text.slice(i, i + q.length)) + "</mark>" + esc(text.slice(i + q.length));
+  }
+  var TREND = { up: ["↑", "Rising"], down: ["↓", "Falling"] };
+
+  function viewAnalysis(tab) {
+    setTab("analysis");
+    if (["all", "recent"].indexOf(tab) < 0) { go("#/analysis/all", true); return; }
+    var d = analysisData();
+    var tabs = [["all", "All years · " + MIN_YEAR + "–" + MAX_YEAR], ["recent", "Recent trends · " + RECENT_FROM + "–" + MAX_YEAR]];
+    var intro = {
+      all: "Every broad subtopic UPSC has asked, " + MIN_YEAR + "–" + MAX_YEAR + ", most-asked first within each subject. " +
+        "<b>Trend</b> shows whether a subtopic is asked more (rising) or less (falling) in " + SPLIT_YEAR + "–" + MAX_YEAR + " than in " + MIN_YEAR + "–" + (SPLIT_YEAR - 1) +
+        ", allowing for the longer 150-question papers of 2000–2010. Tap a subtopic to practise its questions.",
+      recent: "The same subtopics counted over the last " + (MAX_YEAR - RECENT_FROM + 1) + " papers (" + RECENT_FROM + "–" + MAX_YEAR + "), with the years each was asked " +
+        "(the number in brackets is how many questions that year). Tap a subtopic to practise just these recent questions."
+    }[tab];
+    app.innerHTML = '<h1>PYQ analysis</h1><p class="sub">' + qs(QUESTIONS.length) + ' from ' + d.years.length + ' papers (' + MIN_YEAR + '–' + MAX_YEAR +
+      ', GS only), grouped into ' + Object.keys(UNITS).length + ' broad subtopics.</p>' +
+      '<div class="an-tabs" role="tablist">' + tabs.map(function (t) {
+        return '<a role="tab" href="#/analysis/' + t[0] + '" class="' + (t[0] === tab ? "active" : "") + '" aria-selected="' + (t[0] === tab) + '">' + t[1] + '</a>';
+      }).join("") + '</div>' +
+      '<p class="an-intro">' + intro + '</p>' +
+      '<div class="an-controls"><label class="visually-hidden" for="an-subject">Subject</label>' +
+        '<select id="an-subject"><option value="">All subjects</option>' + SUBJECTS.map(function (s) {
+          return '<option value="' + s.id + '"' + (anFilter.subject === s.id ? " selected" : "") + '>' + esc(s.name) + '</option>';
+        }).join("") + '</select>' +
+        '<label class="visually-hidden" for="an-search">Search subtopics</label>' +
+        '<input id="an-search" type="search" placeholder="Search a subtopic, e.g. soil, rights, Buddhism" autocomplete="off" value="' + esc(anFilter.query) + '">' +
+        '</div><div id="an-out"></div>';
+    var out = document.getElementById("an-out");
+    function draw() { out.innerHTML = unitTable(d, tab); }
+    draw();
+    document.getElementById("an-subject").addEventListener("change", function () { anFilter.subject = this.value; draw(); });
+    // filters while typing, no Enter needed
+    document.getElementById("an-search").addEventListener("input", function () { anFilter.query = this.value; draw(); });
+  }
+
+  function unitTable(d, tab) {
+    var recent = tab === "recent", q = anFilter.query.trim().toLowerCase();
+    var groups = SUBJECTS.filter(function (s) { return !anFilter.subject || s.id === anFilter.subject; }).map(function (s) {
+      var rows = d.rows.filter(function (r) { return r.unit.subject === s.id; }).map(function (r) {
+        if (!q) return { r: r };
+        if (r.unit.title.toLowerCase().indexOf(q) >= 0 || s.name.toLowerCase().indexOf(q) >= 0) return { r: r };
+        var hit = r.unit.topics.filter(function (t) { return t.toLowerCase().indexOf(q) >= 0; });
+        return hit.length ? { r: r, via: hit } : null;
+      }).filter(Boolean);
+      rows.sort(function (a, b) {
+        return recent ? (b.r.recent - a.r.recent || b.r.total - a.r.total) : (b.r.total - a.r.total);
+      });
+      return { s: s, rows: rows };
+    }).filter(function (g) { return g.rows.length; });
+    if (!groups.length) return '<p class="empty">No subtopic matches “' + esc(anFilter.query) + '”.</p>';
+    var count = groups.reduce(function (n, g) { return n + g.rows.length; }, 0);
+    var head = recent ?
+      '<tr><th>Subject</th><th>Subtopic</th><th class="num">Questions</th><th>Years asked</th></tr>' :
+      '<tr><th>Subject</th><th>Subtopic</th><th class="num">Questions</th><th>Trend</th></tr>';
+    var body = groups.map(function (g) {
+      var subTotal = g.rows.reduce(function (n, x) { return n + (recent ? x.r.recent : x.r.total); }, 0);
+      var cols = 4;
+      // on phones the Subject column is hidden and this header row stands in for it
+      return '<tr class="an-group"><td colspan="' + cols + '"><b>' + hl(g.s.name, q) + '</b> · ' + qs(subTotal) + '</td></tr>' + g.rows.map(function (x, i) {
+        var r = x.r, u = r.unit;
+        var practise = "#/unit/" + u.id + (recent ? "@" + RECENT_FROM : "") + "/0";
+        var n = recent ? r.recent : r.total;
+        var name = (n ? '<a class="an-unit" href="' + practise + '" title="Practise these ' + qs(n) + '">' + hl(u.title, q) + '</a>' : '<span class="an-unit none">' + hl(u.title, q) + '</span>') +
+          (x.via ? '<small class="an-via">includes ' + x.via.map(function (t) { return hl(t, q); }).join("; ") + '</small>' : "") +
+          (u.firstTopic ? ' <a class="an-notes" href="#/notes/' + u.subject + '/' + u.firstTopic + '">notes</a>' : "");
+        var subj = i === 0 ? '<td class="an-subj" rowspan="' + g.rows.length + '"><b>' + hl(g.s.name, q) + '</b><small>' + qs(subTotal) + '</small></td>' : "";
+        if (recent) {
+          var yrs = r.recentYears.map(function (y) { return y + (r.byYear[y] > 1 ? " (" + r.byYear[y] + ")" : ""); }).join(", ");
+          return '<tr>' + subj + '<td>' + name + '</td><td class="num"><b>' + n + '</b></td><td class="an-years">' + (yrs || '<span class="muted">not asked</span>') + '</td></tr>';
+        }
+        var t = TREND[r.trend];
+        return '<tr>' + subj + '<td>' + name + '</td><td class="num"><b>' + n + '</b></td>' +
+          '<td><span class="trend ' + r.trend + '">' + t[0] + ' ' + t[1] + '</span></td></tr>';
+      }).join("");
+    }).join("");
+    return '<p class="an-count">' + count + (count === 1 ? " subtopic" : " subtopics") + '</p>' +
+      '<div class="table-wrap"><table class="an-table' + (recent ? " recent" : "") + '">' + head + body + '</table></div>';
+  }
+
   // ---------- topic-wise books ----------
   function bookTopics(id) {
     var out = [];
@@ -1065,7 +1201,9 @@
       case "": viewHome(); break;
       case "subjects": viewSubjects(); break;
       case "papers": viewPapers(); break;
+      case "analysis": viewAnalysis(parts[1]); break;
       case "subject":
+      case "unit":
       case "paper": viewQuiz(parts[0], parts[1], parts[2] === undefined ? 0 : parseInt(parts[2], 10)); scrollTop = false; break;
       case "notes": viewNotes(parts[1], parts[2]); break;
       case "test": viewTest(parts[1], parts[2]); scrollTop = parts[1] !== "q"; break;

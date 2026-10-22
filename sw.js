@@ -1,5 +1,5 @@
-/* UPSC PYQ portal service worker: keeps a full offline copy; built 202610221143 */
-const CACHE = 'upsc-pyq-202610221143';
+/* UPSC PYQ portal service worker: keeps a full offline copy; built 202610221826 */
+const CACHE = 'upsc-pyq-202610221826';
 const ASSETS = [
  "./",
  "./index.html",
@@ -8,12 +8,12 @@ const ASSETS = [
  "./icon-512.png",
  "./icon-maskable-512.png",
  "./apple-touch-icon.png",
- "./style.css?v=20261022d",
- "./app.js?v=20261022d",
- "./data/pyq-1.js?v=202610221143",
- "./data/pyq-2.js?v=202610221143",
- "./data/pyq-3.js?v=202610221143",
- "./data/pyq-4.js?v=202610221143"
+ "./style.css?v=20261022h",
+ "./app.js?v=20261022g",
+ "./data/pyq-1.js?v=202610221826",
+ "./data/pyq-2.js?v=202610221826",
+ "./data/pyq-3.js?v=202610221826",
+ "./data/pyq-4.js?v=202610221826"
 ];
 
 self.addEventListener('install', e => {
